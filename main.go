@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"flag"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -20,9 +21,9 @@ func getFileInfo(fileName string) (int, string) {
 	return int(res.ContentLength), res.Request.URL.String()
 }
 
-func download(url string, filePtr *os.File, from int, length int) error {
+func download(url string, filePtr *os.File, from int, length int, chunkSize int) error {
+	defer wg.Done()
 	fmt.Println("Getting range: ", from, " - ", from+length)
-	chunkSize := (1024 * 1024)
 	client := &http.Client{}
 	for i := 0; i < length; i += chunkSize {
 		req, err := http.NewRequest("GET", url, nil)
@@ -48,32 +49,37 @@ func download(url string, filePtr *os.File, from int, length int) error {
 		filePtr.Write(responseData)
 	}
 	filePtr.Close()
-	wg.Done()
 	return nil
 }
 
 func main() {
-	totalRoutines := 6
-	tempFilePrefix := "dlmax."
-	argsWithProg := os.Args
+	threads := flag.Int("threads", 6, "Total threads you want to spawn in parallel")
+	chunk := flag.Int("chunk", 1024, "Download chunks in Kilobytes")
 
-	if len(argsWithProg) < 2 {
+	flag.Parse()
+
+	downloadChunkSize := ((*chunk) * 1024)
+	totalRoutines := *threads
+	tempFilePrefix := "dlmax."
+	argsWithProg := flag.Args()
+
+	if len(argsWithProg) < 1 {
 		fmt.Println("Please specify a valid url to download")
 		os.Exit(1)
 	}
 
-	toDownload := argsWithProg[1]
+	toDownload := argsWithProg[0]
 	destFileName := filepath.Base(toDownload)
 
-	fmt.Println("Downloading... ", toDownload)
+	fmt.Printf("Downloading %s with %d threads and chunk size = %d bytes\n", toDownload, totalRoutines, downloadChunkSize)
 
 	fileSize, realUrl := getFileInfo(toDownload)
 	fmt.Println("Sizeof file = ", fileSize)
 
 	wg.Add(totalRoutines)
 
-	chunkSize := fileSize / totalRoutines
-	extraChunk := fileSize % totalRoutines
+	fileChunkSize := fileSize / totalRoutines
+	fileExtraChunk := fileSize % totalRoutines
 
 	files := make([]string, totalRoutines)
 
@@ -86,9 +92,9 @@ func main() {
 		}
 		fmt.Println("Downloading to..", file.Name())
 		if totalRoutines-1 == i {
-			go download(realUrl, file, (i * chunkSize), chunkSize+extraChunk)
+			go download(realUrl, file, (i * fileChunkSize), fileChunkSize+ fileExtraChunk, downloadChunkSize)
 		} else {
-			go download(realUrl, file, (i * chunkSize), chunkSize)
+			go download(realUrl, file, (i * fileChunkSize), fileChunkSize, downloadChunkSize)
 		}
 		files[i] = file.Name()
 	}
